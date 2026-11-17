@@ -1,0 +1,679 @@
+<script>
+// plagx-preflight 0.1.3 (MIT, https://github.com/plagiarismcheckerx/plagx-preflight), bundled by scripts/build-lib.js.
+var PlagxPreflight = (() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+  var __copyProps = (to, from, except, desc) => {
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (let key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(to, key) && key !== except)
+          __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+    }
+    return to;
+  };
+  var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+  // node_modules/plagx-preflight/src/index.js
+  var index_exports = {};
+  __export(index_exports, {
+    CHECKS: () => CHECKS,
+    DEFAULT_CHECKS: () => DEFAULT_CHECKS,
+    STYLES: () => STYLES,
+    VERSION: () => VERSION,
+    checkDraft: () => checkDraft,
+    countWords: () => countWords,
+    findCitations: () => findCitations,
+    splitSentences: () => splitSentences
+  });
+
+  // node_modules/plagx-preflight/src/text.js
+  var WORD_RE = /[\p{L}\p{M}0-9]+(?:['’-][\p{L}\p{M}0-9]+)*/gu;
+  var ABBREVIATIONS = /* @__PURE__ */ new Set([
+    "al",
+    "approx",
+    "cf",
+    "co",
+    "dept",
+    "dr",
+    "ed",
+    "eds",
+    "eg",
+    "et",
+    "etc",
+    "fig",
+    "figs",
+    "ie",
+    "inc",
+    "jr",
+    "ltd",
+    "mr",
+    "mrs",
+    "ms",
+    "no",
+    "nos",
+    "p",
+    "pp",
+    "prof",
+    "sr",
+    "st",
+    "vol",
+    "vols",
+    "vs"
+  ]);
+  var REFERENCE_HEADINGS = /* @__PURE__ */ new Set([
+    "references",
+    "reference list",
+    "bibliography",
+    "works cited",
+    "work cited",
+    "sources",
+    "literature cited"
+  ]);
+  function words(text) {
+    const out = [];
+    for (const m of text.matchAll(WORD_RE)) out.push({ text: m[0], start: m.index, end: m.index + m[0].length });
+    return out;
+  }
+  function countWords(text) {
+    return words(String(text)).length;
+  }
+  function lineStarts(text) {
+    const starts = [0];
+    for (let i = 0; i < text.length; i += 1) if (text[i] === "\n") starts.push(i + 1);
+    return starts;
+  }
+  function position(starts, offset) {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = lo + hi + 1 >> 1;
+      if (starts[mid] <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return { line: lo + 1, column: offset - starts[lo] + 1 };
+  }
+  var isSpace = (c) => c === " " || c === "	" || c === "\r" || c === "\n" || c === "\f" || c === "\v" || c === "\xA0";
+  function normalizeHeading(s) {
+    return s.trim().replace(/^#+\s*/, "").replace(/^(?:\d+(?:\.\d+)*\.?|[ivxlc]+\.)\s+/i, "").replace(/\s*:$/, "").replace(/\s+/g, " ").toLowerCase();
+  }
+  function isHeading(p) {
+    if (p.text.includes("\n")) return false;
+    if (p.text.startsWith("#")) return true;
+    if (REFERENCE_HEADINGS.has(normalizeHeading(p.text))) return true;
+    const n = countWords(p.text);
+    if (n < 1 || n > 10) return false;
+    if (/[.!?,;"'”’)\]]$/.test(p.text)) return false;
+    return /^[\p{Lu}0-9]/u.test(p.text);
+  }
+  function paragraphs(text) {
+    const out = [];
+    const starts = lineStarts(text);
+    let blockStart = -1;
+    let blockEnd = -1;
+    const flush = () => {
+      if (blockStart < 0) return;
+      let s = blockStart;
+      let e = blockEnd;
+      while (s < e && isSpace(text[s])) s += 1;
+      while (e > s && isSpace(text[e - 1])) e -= 1;
+      const p = { text: text.slice(s, e), start: s, end: e };
+      p.heading = isHeading(p);
+      out.push(p);
+      blockStart = -1;
+    };
+    for (let i = 0; i < starts.length; i += 1) {
+      const ls = starts[i];
+      const le = i + 1 < starts.length ? starts[i + 1] - 1 : text.length;
+      const line = text.slice(ls, le);
+      if (/^[ \t\r\f\v ]*$/.test(line)) {
+        flush();
+      } else {
+        if (blockStart < 0) blockStart = ls;
+        blockEnd = le;
+      }
+    }
+    flush();
+    return out;
+  }
+  function structure(text) {
+    const paras = paragraphs(text);
+    const idx = paras.findIndex((p) => p.heading && REFERENCE_HEADINGS.has(normalizeHeading(p.text)));
+    const body = idx < 0 ? paras : paras.slice(0, idx);
+    const referenceHeading = idx < 0 ? null : paras[idx];
+    const entries = [];
+    if (idx >= 0) {
+      const starts = lineStarts(text);
+      for (let i = 0; i < starts.length; i += 1) {
+        const ls = starts[i];
+        if (ls <= referenceHeading.end) continue;
+        const le = i + 1 < starts.length ? starts[i + 1] - 1 : text.length;
+        let s = ls;
+        let e = le;
+        while (s < e && isSpace(text[s])) s += 1;
+        while (e > s && isSpace(text[e - 1])) e -= 1;
+        if (e > s) entries.push({ text: text.slice(s, e), start: s, end: e });
+      }
+    }
+    const bodyEnd = idx < 0 ? text.length : referenceHeading.start;
+    return { paragraphs: paras, body, bodyEnd, referenceHeading, entries };
+  }
+  function sentencesIn(s, base) {
+    const out = [];
+    let start = 0;
+    const push = (end) => {
+      let a = start;
+      let b = end;
+      while (a < b && isSpace(s[a])) a += 1;
+      while (b > a && isSpace(s[b - 1])) b -= 1;
+      if (b > a) out.push({ text: s.slice(a, b), start: base + a, end: base + b });
+      start = end;
+    };
+    for (const m of s.matchAll(/[.!?]+["'”’)\]]*(?=\s|$)/g)) {
+      const marks = m[0].replace(/["'”’)\]]+$/, "");
+      if (marks.startsWith("..")) continue;
+      if (marks === ".") {
+        const before = s.slice(0, m.index).match(/(?:^|[\s(])([\p{L}.]+)$/u);
+        if (before) {
+          const w = before[1].toLowerCase();
+          if (ABBREVIATIONS.has(w) || /^\p{L}$/u.test(w) || w.includes(".")) continue;
+        }
+      }
+      push(m.index + m[0].length);
+    }
+    push(s.length);
+    return out;
+  }
+  function splitSentences(text) {
+    const out = [];
+    for (const p of paragraphs(String(text))) {
+      if (p.heading) out.push({ text: p.text, start: p.start, end: p.end });
+      else out.push(...sentencesIn(p.text, p.start));
+    }
+    return out;
+  }
+  function paragraphSentences(p) {
+    return sentencesIn(p.text, p.start);
+  }
+  function syllables(word) {
+    let w = word.toLowerCase().replace(/[^a-z]/g, "");
+    if (!w) return 0;
+    if (w.length <= 3) return 1;
+    w = w.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, "").replace(/^y/, "");
+    const groups = w.match(/[aeiouy]+/g);
+    return groups ? groups.length : 1;
+  }
+
+  // node_modules/plagx-preflight/src/citations.js
+  var STYLES = ["apa", "mla"];
+  var YEAR = "(?:\\d{4}[a-z]?|n\\.d\\.)";
+  var NAME = "\\p{Lu}[\\p{L}'\\u2019-]+";
+  var NOT_AUTHORS = /* @__PURE__ */ new Set([
+    "appendix",
+    "chapter",
+    "chapters",
+    "fig",
+    "figure",
+    "figures",
+    "line",
+    "lines",
+    "p",
+    "page",
+    "pages",
+    "part",
+    "phase",
+    "pp",
+    "section",
+    "see",
+    "step",
+    "table",
+    "tables",
+    "version",
+    "vol",
+    "volume"
+  ]);
+  var firstWord = (s) => {
+    const m = s.match(/\p{L}[\p{L}'’-]*/u);
+    return m ? m[0].toLowerCase().replace(/’/g, "'") : "";
+  };
+  function apa(text) {
+    const out = [];
+    const paren = new RegExp(`\\(([^()]*?${YEAR}[^()]*)\\)`, "gu");
+    for (const m of text.matchAll(paren)) {
+      let offset = m.index + 1;
+      for (const part of m[1].split(";")) {
+        const lead = part.length - part.trimStart().length;
+        const trimmed = part.trim();
+        const pStart = offset + lead;
+        offset += part.length + 1;
+        const prefix = trimmed.match(/^(?:e\.g\.|see also|see|cf\.),?\s+/i);
+        const skip = prefix ? prefix[0].length : 0;
+        const rest = trimmed.slice(skip);
+        const authorMatch = rest.match(new RegExp(`^(.*?\\p{L}.*?),?\\s+(${YEAR}(?:,\\s*${YEAR})*)(?=$|,)`, "u"));
+        if (!authorMatch) continue;
+        const author = authorMatch[1];
+        if (!/^\p{Lu}/u.test(author) || NOT_AUTHORS.has(firstWord(author))) continue;
+        for (const y of authorMatch[2].split(/,\s*/)) {
+          out.push({ text: rest, start: pStart + skip, end: pStart + trimmed.length, author, key: firstWord(author), year: y.toLowerCase() });
+        }
+      }
+    }
+    const narrative = new RegExp(`((?:${NAME}\\s+){0,4}${NAME}(?:\\s+(?:and|&)\\s+${NAME}|\\s+et\\.?\\s*al\\.*)?)\\s+\\((${YEAR})(?:,[^()]*)?\\)`, "gu");
+    for (const m of text.matchAll(narrative)) {
+      out.push({ text: m[0], start: m.index, end: m.index + m[0].length, author: m[1], key: firstWord(m[1]), year: m[2].toLowerCase() });
+    }
+    return out;
+  }
+  function mla(text) {
+    const out = [];
+    for (const m of text.matchAll(/\(([^()]+)\)/g)) {
+      let offset = m.index + 1;
+      for (const part of m[1].split(";")) {
+        const lead = part.length - part.trimStart().length;
+        const trimmed = part.trim();
+        const pStart = offset + lead;
+        offset += part.length + 1;
+        const pm = trimmed.match(/^(\p{Lu}[\p{L}'’.\- &,]*?),?\s+(\d+(?:\s*[-–]\s*\d+)?)$/u);
+        if (!pm || NOT_AUTHORS.has(firstWord(pm[1])) || /^\d{4}$/.test(pm[2])) continue;
+        out.push({ text: trimmed, start: pStart, end: pStart + trimmed.length, author: pm[1], key: firstWord(pm[1]), year: null });
+      }
+    }
+    return out;
+  }
+  function findCitations(text, style = "apa") {
+    if (!STYLES.includes(style)) throw new TypeError(`Unknown style "${style}". Use: ${STYLES.join(", ")}`);
+    const list = style === "apa" ? apa(String(text)) : mla(String(text));
+    return list.sort((a, b) => a.start - b.start || a.end - b.end);
+  }
+  function citationMatches(citation, entry) {
+    if (citation.year !== null && citation.year !== entry.year) return false;
+    const names = (citation.author.match(/\p{L}[\p{L}'’-]*/gu) || []).map((w) => w.toLowerCase().replace(/’/g, "'"));
+    return names.includes(entry.key);
+  }
+  function parseEntry(text) {
+    const body = text.replace(/^(?:\[\d+\]|\d+\.|[-*•])\s+/, "");
+    const y = body.match(new RegExp(`\\((${YEAR})`));
+    return { key: firstWord(body), year: y ? y[1].toLowerCase() : null };
+  }
+
+  // node_modules/plagx-preflight/src/checks.js
+  var LONG_SENTENCE_WORDS = 40;
+  var LONG_PARAGRAPH_WORDS = 250;
+  var LIST_ITEM = /^(?:[-*+•]|\d+[.)])\s/;
+  var upperFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  var matchCase = (fix, original) => /^\p{Lu}/u.test(original) ? upperFirst(fix) : fix;
+  function length(ctx) {
+    const { stats, opts } = ctx;
+    if (opts.minWords != null && stats.words < opts.minWords) {
+      ctx.addDoc("warning", "word-count-low", `Suggestion: the draft has ${stats.words} words; the minimum is ${opts.minWords}.`);
+    }
+    if (opts.maxWords != null && stats.words > opts.maxWords) {
+      ctx.addDoc("warning", "word-count-high", `Suggestion: the draft has ${stats.words} words; the maximum is ${opts.maxWords}.`);
+    }
+    for (const p of ctx.body) {
+      if (p.heading) continue;
+      const sentences = paragraphSentences(p);
+      for (const s of sentences) {
+        const n2 = countWords(s.text);
+        if (n2 > LONG_SENTENCE_WORDS) {
+          ctx.add(
+            "warning",
+            "long-sentence",
+            s.start,
+            s.end,
+            `Suggestion: this sentence has ${n2} words; consider splitting it (over ${LONG_SENTENCE_WORDS}).`
+          );
+        }
+      }
+      const n = countWords(p.text);
+      if (n > LONG_PARAGRAPH_WORDS) {
+        ctx.add(
+          "info",
+          "long-paragraph",
+          p.start,
+          p.end,
+          `Suggestion: this paragraph has ${n} words; consider splitting it (over ${LONG_PARAGRAPH_WORDS}).`
+        );
+      }
+      if (sentences.length === 1 && !LIST_ITEM.test(p.text)) {
+        ctx.add("info", "single-sentence-paragraph", p.start, p.end, "Suggestion: this paragraph has only one sentence.");
+      }
+    }
+    const headings = new Set(ctx.headings.map((h) => h.normalized));
+    for (const h of opts.requiredHeadings) {
+      if (!headings.has(ctx.normalizeHeading(h))) ctx.addDoc("warning", "missing-heading", `Suggestion: add a "${h}" heading.`);
+    }
+  }
+  function references(ctx) {
+    const { opts, doc } = ctx;
+    const citations = findCitations(ctx.bodyText, opts.style);
+    if (citations.length && !doc.referenceHeading) {
+      ctx.addDoc(
+        "error",
+        "missing-reference-section",
+        "Suggestion: the draft has citations but no reference list heading (References or Works Cited)."
+      );
+    }
+    const entries = doc.entries.map((e) => ({ ...e, ...parseEntry(e.text) }));
+    if (doc.referenceHeading) {
+      for (const c of citations) {
+        if (!entries.some((e) => citationMatches(c, e))) {
+          ctx.add(
+            "error",
+            "citation-no-reference",
+            c.start,
+            c.end,
+            `Suggestion: "${c.text}" has no matching entry in the reference list.`
+          );
+        }
+      }
+      for (const e of entries) {
+        if (!citations.some((c) => citationMatches(c, e))) {
+          ctx.add("warning", "reference-not-cited", e.start, e.end, "Suggestion: this reference is never cited in the text.");
+        }
+      }
+    }
+    for (const m of ctx.bodyText.matchAll(/\bet\.?\s*al\b\.*/gi)) {
+      if (m[0].toLowerCase() !== "et al.") {
+        ctx.add("warning", "et-al-format", m.index, m.index + m[0].length, 'Suggestion: write "et al." with one period.', "et al.");
+      }
+    }
+  }
+  var PAIRS = { ")": "(", "]": "[", "}": "{" };
+  function punctuation(ctx) {
+    let straight = -1;
+    let curly = -1;
+    for (const p of ctx.body) {
+      const t = p.text;
+      const at = (i) => p.start + i;
+      const quotes = [];
+      for (let i = 0; i < t.length; i += 1) if (t[i] === '"') quotes.push(i);
+      if (quotes.length) straight = straight < 0 ? at(quotes[0]) : straight;
+      if (quotes.length % 2 === 1) {
+        const i = quotes[quotes.length - 1];
+        ctx.add("warning", "unmatched-quote", at(i), at(i) + 1, "Suggestion: this quotation mark has no matching pair.");
+      }
+      const open = [];
+      for (let i = 0; i < t.length; i += 1) {
+        if (t[i] === "\u201C" || t[i] === "\u201D") curly = curly < 0 ? at(i) : curly;
+        if (t[i] === "\u201C") open.push(i);
+        else if (t[i] === "\u201D") {
+          if (open.length) open.pop();
+          else ctx.add("warning", "unmatched-quote", at(i), at(i) + 1, "Suggestion: this quotation mark has no matching pair.");
+        }
+      }
+      for (const i of open) ctx.add("warning", "unmatched-quote", at(i), at(i) + 1, "Suggestion: this quotation mark has no matching pair.");
+      const stack = [];
+      for (let i = 0; i < t.length; i += 1) {
+        const c = t[i];
+        if (c === "(" || c === "[" || c === "{") stack.push(i);
+        else if (PAIRS[c]) {
+          if (stack.length && t[stack[stack.length - 1]] === PAIRS[c]) {
+            stack.pop();
+          } else {
+            if (c === ")" && /(?:^|\s)[A-Za-z0-9]{1,3}$/.test(t.slice(0, i))) continue;
+            ctx.add("warning", "unmatched-bracket", at(i), at(i) + 1, `Suggestion: "${c}" has no matching bracket.`);
+          }
+        }
+      }
+      for (const i of stack) ctx.add("warning", "unmatched-bracket", at(i), at(i) + 1, `Suggestion: "${t[i]}" has no matching bracket.`);
+      for (const m of t.matchAll(/(?<=\S) {2,}(?=\S)/g)) {
+        ctx.add("info", "double-space", at(m.index), at(m.index + m[0].length), "Suggestion: use a single space.", " ");
+      }
+      for (const m of t.matchAll(/(?<=[\p{L}0-9)\]"”]) +([,;:!?.])(?=\s|$)/gu)) {
+        ctx.add(
+          "warning",
+          "space-before-punctuation",
+          at(m.index),
+          at(m.index + m[0].length),
+          `Suggestion: remove the space before "${m[1]}".`,
+          m[1]
+        );
+      }
+      for (const m of t.matchAll(/[,;:!?](?=[A-Za-z])|(?<=[a-z]{2})\.(?=[A-Z][a-z])/g)) {
+        ctx.add(
+          "warning",
+          "missing-space-after-punctuation",
+          at(m.index),
+          at(m.index + 1),
+          `Suggestion: add a space after "${m[0]}".`,
+          `${m[0]} `
+        );
+      }
+      for (const m of t.matchAll(/([!?,;:])\1+|(?<!\.)\.\.(?!\.)/g)) {
+        ctx.add(
+          "warning",
+          "repeated-punctuation",
+          at(m.index),
+          at(m.index + m[0].length),
+          `Suggestion: "${m[0]}" repeats punctuation.`,
+          m[0][0]
+        );
+      }
+    }
+    if (straight >= 0 && curly >= 0) {
+      const i = Math.max(straight, curly);
+      ctx.add("info", "mixed-quote-styles", i, i + 1, "Suggestion: the draft mixes straight and curly quotation marks.");
+    }
+  }
+  var SILENT_H = ["hour", "honest", "honor", "honour", "heir"];
+  var CONSONANT_SOUND = ["uni", "use", "usa", "usu", "uti", "ure", "uro", "urani", "eu", "ewe", "one", "once", "ubiq", "unanim"];
+  var UNCERTAIN = ["herb", "histor", "hotel", "unin", "unim", "unid", "oner"];
+  var startsWithAny = (w, list) => list.some((p) => w.startsWith(p));
+  var CONFUSIONS = [
+    [/\b(could|would|should|must|might) of\b/gi, (m) => `${m[1]} have`],
+    [/\bits (a|an|been|not|going)\b/gi, (m) => `it's ${m[1]}`],
+    [/\bit['’]s own\b/gi, () => "its own"],
+    [
+      /\b(more|less|better|worse|rather|greater|fewer|larger|smaller|higher|lower|faster|slower|easier|harder) then\b/gi,
+      (m) => `${m[1]} than`
+    ],
+    [/\btheir (is|are|was|were)\b/gi, (m) => `there ${m[1]}`],
+    [/\bthere own\b/gi, () => "their own"],
+    [/\b(the|an) affect\b/gi, (m) => `${m[1]} effect`],
+    [
+      /\b(may|might|will|can|could|would|should|negatively|positively|greatly|significantly) effect\b/gi,
+      (m) => `${m[1]} affect`
+    ],
+    [/\bloose (weight|track|control)\b/gi, (m) => `lose ${m[1]}`],
+    [/\balot\b/gi, () => "a lot"]
+  ];
+  var PASSIVE = /\b(?:am|is|are|was|were|be|been|being)\s+(?:[a-z]+ly\s+)?(?:[a-z]{3,}ed|written|done|made|given|taken|shown|seen|known|found|held|chosen|built|drawn|taught|thought|brought|said|told|sent|kept|paid|begun|broken|driven|eaten|forgotten|hidden|spoken|stolen|worn)\b/gi;
+  function grammar(ctx) {
+    for (const p of ctx.body) {
+      const t = p.text;
+      const toks = words(t);
+      const gap = (i) => t.slice(toks[i].end, toks[i + 1].start);
+      for (let i = 0; i < toks.length; i += 1) {
+        const tok = toks[i];
+        const low = tok.text.toLowerCase();
+        const hasNext = i + 1 < toks.length && /^\s+$/.test(gap(i));
+        const next = hasNext ? toks[i + 1] : null;
+        if (next && next.text.toLowerCase() === low && /\p{L}/u.test(low) && low !== "had" && low !== "that") {
+          ctx.add(
+            "warning",
+            "repeated-word",
+            p.start + tok.start,
+            p.start + next.end,
+            `Suggestion: "${tok.text} ${next.text}" looks like a repeated word.`,
+            tok.text
+          );
+        }
+        if (next && (low === "a" || low === "an")) {
+          const nw = next.text.split("-")[0];
+          const nl = nw.toLowerCase();
+          const acronym = nw.length > 1 && nw === nw.toUpperCase();
+          if (nw.length > 1 && !/[0-9]/.test(nw) && !acronym && /^[a-z]/.test(nl) && !startsWithAny(nl, UNCERTAIN)) {
+            const vowel = startsWithAny(nl, SILENT_H) || /^[aeiou]/.test(nl) && !startsWithAny(nl, CONSONANT_SOUND);
+            const expected = vowel ? "an" : "a";
+            if (low !== expected) {
+              ctx.add(
+                "warning",
+                "a-an",
+                p.start + tok.start,
+                p.start + tok.end,
+                `Suggestion: use "${expected}" before "${next.text}".`,
+                matchCase(expected, tok.text)
+              );
+            }
+          }
+        }
+        const iForm = tok.text.match(/^i(['’](?:m|ve|ll|d))?$/);
+        if (iForm) {
+          const before = t[tok.start - 1];
+          const after = t[tok.end];
+          if (iForm[1] || after !== "." && after !== ")" && before !== ".") {
+            ctx.add(
+              "warning",
+              "lowercase-i",
+              p.start + tok.start,
+              p.start + tok.end,
+              `Suggestion: use "${upperFirst(tok.text)}" instead of "${tok.text}".`,
+              upperFirst(tok.text)
+            );
+          }
+        }
+      }
+      if (!p.heading) {
+        for (const s of paragraphSentences(p)) {
+          const first = words(s.text)[0];
+          if (first && first.start === 0 && /^\p{Ll}/u.test(first.text) && !/\p{Lu}/u.test(first.text) && !/^i(?:['’](?:m|ve|ll|d))?$/.test(first.text) && s.text[first.end] !== ")") {
+            ctx.add(
+              "warning",
+              "sentence-capital",
+              s.start,
+              s.start + first.end,
+              "Suggestion: start the sentence with a capital letter.",
+              upperFirst(first.text)
+            );
+          }
+        }
+      }
+      for (const [re, fix] of CONFUSIONS) {
+        for (const m of t.matchAll(re)) {
+          const suggestion = matchCase(fix(m), m[0]);
+          ctx.add(
+            "warning",
+            "common-confusion",
+            p.start + m.index,
+            p.start + m.index + m[0].length,
+            `Suggestion: "${m[0]}" may be "${suggestion}".`,
+            suggestion
+          );
+        }
+      }
+    }
+  }
+  function passiveVoice(ctx) {
+    for (const p of ctx.body) {
+      for (const m of p.text.matchAll(PASSIVE)) {
+        ctx.add(
+          "info",
+          "passive-voice",
+          p.start + m.index,
+          p.start + m.index + m[0].length,
+          `Suggestion: "${m[0]}" may be passive voice.`
+        );
+      }
+    }
+  }
+
+  // node_modules/plagx-preflight/src/index.js
+  var VERSION = "0.1.3";
+  var CHECKS = ["length", "references", "punctuation", "grammar", "passive-voice"];
+  var DEFAULT_CHECKS = ["length", "references", "punctuation", "grammar"];
+  var RUNNERS = {
+    length,
+    references,
+    punctuation,
+    grammar,
+    "passive-voice": passiveVoice
+  };
+  var MASKED = /^(?:unmatched-|double-space|space-before|missing-space|repeated-|mixed-quote|a-an|sentence-capital|lowercase-i|common-confusion|passive-voice)/;
+  var MASK_RE = /\bhttps?:\/\/[^\s<>()]+|\bwww\.[^\s<>()]+|[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+|`[^`\n]*`/g;
+  function limit(value, name) {
+    if (value == null) return null;
+    const n = Number(value);
+    if (!Number.isInteger(n) || n < 0) throw new TypeError(`${name} must be a whole number`);
+    return n;
+  }
+  function normalizeOptions(options = {}) {
+    const style = options.style ?? "apa";
+    if (!STYLES.includes(style)) throw new TypeError(`Unknown style "${style}". Use: ${STYLES.join(", ")}`);
+    const list = options.checks ?? DEFAULT_CHECKS;
+    for (const c of list) if (!CHECKS.includes(c)) throw new TypeError(`Unknown check "${c}". Use: ${CHECKS.join(", ")}`);
+    return {
+      minWords: limit(options.minWords, "minWords"),
+      maxWords: limit(options.maxWords, "maxWords"),
+      style,
+      checks: CHECKS.filter((c) => list.includes(c)),
+      requiredHeadings: [...options.requiredHeadings ?? []].map(String)
+    };
+  }
+  function computeStats(text, doc) {
+    const bodyWords = countWords(text.slice(0, doc.bodyEnd));
+    let sentences = 0;
+    let sentenceWords = 0;
+    let syl = 0;
+    let paras = 0;
+    for (const p of doc.body) {
+      if (p.heading) continue;
+      paras += 1;
+      sentences += paragraphSentences(p).length;
+      for (const w of words(p.text)) {
+        sentenceWords += 1;
+        syl += syllables(w.text);
+      }
+    }
+    const flesch = sentences && sentenceWords ? Math.round((206.835 - 1.015 * (sentenceWords / sentences) - 84.6 * (syl / sentenceWords)) * 10) / 10 : 0;
+    return {
+      words: bodyWords,
+      sentences,
+      paragraphs: paras,
+      characters: [...text].length,
+      readingTimeMinutes: Math.ceil(bodyWords / 200),
+      fleschReadingEase: flesch === 0 ? 0 : flesch
+    };
+  }
+  function checkDraft(text, options = {}) {
+    if (typeof text !== "string") throw new TypeError("text must be a string");
+    const opts = normalizeOptions(options);
+    const doc = structure(text);
+    const starts = lineStarts(text);
+    const stats = computeStats(text, doc);
+    const masks = [...text.matchAll(MASK_RE)].map((m) => [m.index, m.index + m[0].length]);
+    const seen = /* @__PURE__ */ new Set();
+    const issues = [];
+    const add = (level, code, start, end, message, suggestion = null) => {
+      if (MASKED.test(code) && masks.some(([a, b]) => start < b && end > a)) return;
+      const key = `${code}:${start}:${end}:${message}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const { line, column } = position(starts, start);
+      issues.push({ level, code, message, start, end, line, column, text: text.slice(start, end), suggestion });
+    };
+    const ctx = {
+      text,
+      opts,
+      doc,
+      stats,
+      body: doc.body,
+      bodyText: text.slice(0, doc.bodyEnd),
+      headings: doc.paragraphs.filter((p) => p.heading).map((p) => ({ ...p, normalized: normalizeHeading(p.text) })),
+      normalizeHeading,
+      add,
+      addDoc: (level, code, message) => add(level, code, 0, 0, message)
+    };
+    for (const c of opts.checks) RUNNERS[c](ctx);
+    issues.sort((a, b) => a.start - b.start || (a.code < b.code ? -1 : a.code > b.code ? 1 : 0) || a.end - b.end);
+    const count = (level) => issues.filter((i) => i.level === level).length;
+    return { stats, errors: count("error"), warnings: count("warning"), infos: count("info"), issues };
+  }
+  return __toCommonJS(index_exports);
+})();
+</script>

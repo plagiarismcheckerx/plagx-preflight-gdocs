@@ -1,0 +1,6 @@
+node_modules/
+preview.html
+*.tmp.html
+.clasprc.json
+.DS_Store
+Thumbs.db

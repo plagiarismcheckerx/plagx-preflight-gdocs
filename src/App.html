@@ -1,0 +1,133 @@
+<script>
+// Sidebar logic: gets the document text from Apps Script, checks it with Plagx Preflight
+// (bundled in Lib.html as window.PlagxPreflight) and lists the issues. Clicking an issue
+// selects that text in the document.
+(function () {
+  var LEVELS = { error: 'Error', warning: 'Warning', info: 'Suggestion' };
+  var $ = function (id) { return document.getElementById(id); };
+  var lastText = '';
+
+  function count(n, word) { return n + ' ' + word + (n === 1 ? '' : 's'); }
+
+  /** The level is shown as a label, so drop the "Suggestion: " prefix and capitalise what is left. */
+  function plain(msg) {
+    var text = msg.replace(/^Suggestion: /, '');
+    return text.charAt(0).toUpperCase() + text.slice(1);
+  }
+
+  function el(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function message(text, className) {
+    $('result').replaceChildren(el('p', className || 'plagx-hint', text));
+  }
+
+  /** How many times `snippet` appears in the checked text before `start`, so the right match is selected. */
+  function occurrenceBefore(snippet, start) {
+    var n = 0;
+    var i = lastText.indexOf(snippet);
+    while (i !== -1 && i < start) {
+      n++;
+      i = lastText.indexOf(snippet, i + 1);
+    }
+    return n;
+  }
+
+  function locate(issue, item) {
+    var snippet = issue.text.split('\n')[0];
+    item.classList.add('is-busy');
+    google.script.run
+      .withSuccessHandler(function (found) {
+        item.classList.remove('is-busy');
+        if (!found) item.classList.add('is-missing');
+      })
+      .withFailureHandler(function () { item.classList.remove('is-busy'); })
+      .selectText(snippet, occurrenceBefore(snippet, issue.start));
+  }
+
+  function render(result) {
+    var out = $('result');
+    out.replaceChildren();
+    var stats = result.stats;
+    var tiles = el('div', 'plagx-stats');
+    [[stats.words, 'Words'], [stats.readingTimeMinutes, 'Min read'], [stats.sentences, 'Sentences'], [stats.paragraphs, 'Paragraphs']]
+      .forEach(function (pair) {
+        var tile = el('div', 'plagx-stat');
+        tile.append(el('strong', '', String(pair[0])), el('span', '', pair[1]));
+        tiles.append(tile);
+      });
+    var pills = el('div', 'plagx-pills');
+    pills.append(
+      el('span', 'plagx-pill' + (result.errors ? ' is-error' : ''), count(result.errors, 'error')),
+      el('span', 'plagx-pill' + (result.warnings ? ' is-warning' : ''), count(result.warnings, 'warning')),
+      el('span', 'plagx-pill' + (result.infos ? ' is-info' : ''), count(result.infos, 'suggestion'))
+    );
+    out.append(tiles, pills);
+    if (!result.issues.length) {
+      out.append(el('p', 'plagx-done', '✓ No issues found.'));
+      return;
+    }
+    var list = el('ul', 'plagx-issues');
+    result.issues.forEach(function (issue) {
+      var item = el('li', 'plagx-issue is-' + issue.level);
+      item.append(el('span', 'plagx-issue__level', LEVELS[issue.level]), el('span', 'plagx-issue__message', plain(issue.message)));
+      if (issue.text) {
+        var snippet = issue.text.length > 80 ? issue.text.slice(0, 80) + '…' : issue.text;
+        item.append(el('span', 'plagx-issue__text', snippet));
+        item.tabIndex = 0;
+        item.setAttribute('role', 'button');
+        item.title = 'Find in document';
+        item.addEventListener('click', function () { locate(issue, item); });
+        item.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); locate(issue, item); }
+        });
+      }
+      list.append(item);
+    });
+    out.append(list);
+  }
+
+  function options() {
+    var number = function (id) { return parseInt($(id).value, 10) || undefined; };
+    var checks = [];
+    document.querySelectorAll('input[name="check"]').forEach(function (box) { if (box.checked) checks.push(box.value); });
+    return { minWords: number('min-words'), maxWords: number('max-words'), style: $('style').value, checks: checks };
+  }
+
+  function source() {
+    var checked = document.querySelector('input[name="source"]:checked');
+    return checked ? checked.value : 'document';
+  }
+
+  function run() {
+    var button = $('check');
+    var from = source();
+    button.disabled = true;
+    message('Reading the document…');
+    google.script.run
+      .withSuccessHandler(function (text) {
+        button.disabled = false;
+        if (!text) {
+          message(from === 'selection' ? 'Select some text in the document, then check again.' : 'This document has no text to check yet.');
+          return;
+        }
+        try {
+          lastText = text;
+          render(window.PlagxPreflight.checkDraft(text, options()));
+        } catch (err) {
+          message(err.message, 'plagx-fail');
+        }
+      })
+      .withFailureHandler(function (err) {
+        button.disabled = false;
+        message(err && err.message ? err.message : String(err), 'plagx-fail');
+      })[from === 'selection' ? 'getSelectionText' : 'getDocumentText']();
+  }
+
+  $('check').addEventListener('click', run);
+})();
+</script>

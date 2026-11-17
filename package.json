@@ -1,0 +1,23 @@
+{
+  "name": "plagx-preflight-gdocs",
+  "version": "1.0.0",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "build": "node scripts/build-lib.js",
+    "test": "node --test",
+    "push": "npm run build && clasp push",
+    "deploy": "npm run build && clasp push && clasp version"
+  },
+  "author": "Plagiarism Checker X (https://plagiarismcheckerx.com/)",
+  "license": "MIT",
+  "description": "Plagx Draft Preflight for Google Docs: word count, citations, punctuation and basic grammar checks in a Docs sidebar. By Plagiarism Checker X.",
+  "devDependencies": {
+    "@google/clasp": "^3.4.1",
+    "esbuild": "^0.25.12",
+    "plagx-preflight": "^0.1.3"
+  },
+  "private": true,
+  "type": "module"
+}
